@@ -1,0 +1,5 @@
+{
+  "noise_weight": 1.0,
+  "search_aggression": 1.0,
+  "temp_target_offset_c": 0
+}

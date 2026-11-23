@@ -1,0 +1,28 @@
+{
+  "mode": "curve",
+  "t_crit_c": 83,
+  "gpus": [
+    {
+      "index": 0,
+      "t_on": 45,
+      "t_off": 42,
+      "min_duty": 30,
+      "t_full": 75,
+      "scale": 1.0,
+      "slew_up": 8,
+      "slew_down": 4,
+      "curve_gen": 0
+    },
+    {
+      "index": 1,
+      "t_on": 45,
+      "t_off": 42,
+      "min_duty": 30,
+      "t_full": 75,
+      "scale": 1.0,
+      "slew_up": 8,
+      "slew_down": 4,
+      "curve_gen": 0
+    }
+  ]
+}

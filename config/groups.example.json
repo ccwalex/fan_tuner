@@ -1,0 +1,35 @@
+{
+  "groups": [
+    {
+      "name": "rear_a",
+      "channels": [{ "hwmon": "hwmon2", "pwm": 1 }]
+    },
+    {
+      "name": "rear_b",
+      "channels": [{ "hwmon": "hwmon2", "pwm": 2 }]
+    },
+    {
+      "name": "front_a",
+      "channels": [{ "hwmon": "hwmon2", "pwm": 3 }]
+    },
+    {
+      "name": "front_b",
+      "channels": [{ "hwmon": "hwmon2", "pwm": 4 }]
+    },
+    {
+      "name": "cpu_cooler",
+      "channels": [{ "hwmon": "hwmon3", "pwm": 1 }]
+    }
+  ],
+  "tdp_watts": { "cpu": 250, "gpu0": 450, "gpu1": 450 },
+  "temp_targets_c": { "cpu": 75, "gpu0": 78, "gpu1": 78 },
+  "temp_hard_cap_c": { "cpu": 95, "gpu0": 83, "gpu1": 83 },
+  "commit_pwm_threshold": 0.10,
+  "load_step": 0.15,
+  "ambient_step_c": 4,
+  "stable_sec": 8,
+  "settle_sec": 45,
+  "tick_hz": 0.5,
+  "socket_path": "data/fan-daemon.sock",
+  "data_dir": "data"
+}

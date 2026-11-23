@@ -1,0 +1,14 @@
+[Unit]
+Description=Fan optimizer daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fan-daemon -groups /etc/fan-optimizer/groups.json -gpu /etc/fan-optimizer/gpu_curve.json -human /etc/fan-optimizer/human.json
+ExecStopPost=/bin/sh -c 'for e in /sys/class/hwmon/hwmon*/pwm*_enable; do echo 2 > "$e" 2>/dev/null; done'
+Restart=on-failure
+Nice=15
+CPUSchedulingPolicy=idle
+
+[Install]
+WantedBy=multi-user.target

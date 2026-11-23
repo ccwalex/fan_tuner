@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>GPU fan curve</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; background: #0f1115; color: #e8eaed; }
+    body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; font-weight: 600; }
+  .card { background: #1a1d24; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }
+    label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.85rem; color: #9aa0a6; }
+    input[type=range] { width: 100%; }
+    .row { display: flex; gap: 0.5rem; align-items: center; }
+    .val { min-width: 3rem; text-align: right; font-variant-numeric: tabular-nums; }
+    canvas { width: 100%; height: 160px; background: #0f1115; border-radius: 6px; margin-top: 0.5rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1.25rem; background: #3b82f6; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+    button:hover { background: #2563eb; }
+    select { background: #0f1115; color: #e8eaed; border: 1px solid #333; padding: 0.35rem; border-radius: 4px; }
+    .status { font-size: 0.85rem; color: #6ee7b7; min-height: 1.2rem; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>GPU fan curve (human only)</h1>
+  <p style="color:#9aa0a6;font-size:0.9rem">Adjust sliders, save to apply. Case fans are not changed here.</p>
+  <div class="card">
+    <label>GPU</label>
+    <select id="gpuIndex"></select>
+    <label>Mode</label>
+    <select id="mode">
+      <option value="curve">curve (daemon controls)</option>
+      <option value="nvidia-auto">nvidia-auto</option>
+    </select>
+    <label>Start fan (t_on °C) <span class="val" id="t_on_v"></span></label>
+    <input type="range" id="t_on" min="30" max="65" step="1"/>
+    <label>Stop hysteresis (t_off °C) <span class="val" id="t_off_v"></span></label>
+    <input type="range" id="t_off" min="25" max="62" step="1"/>
+    <label>Min duty % <span class="val" id="min_duty_v"></span></label>
+    <input type="range" id="min_duty" min="0" max="60" step="1"/>
+    <label>Full curve at (t_full °C) <span class="val" id="t_full_v"></span></label>
+    <input type="range" id="t_full" min="55" max="90" step="1"/>
+    <label>Scale <span class="val" id="scale_v"></span></label>
+    <input type="range" id="scale" min="50" max="150" step="5"/>
+    <label>Ramp up %/s <span class="val" id="slew_up_v"></span></label>
+    <input type="range" id="slew_up" min="1" max="40" step="1"/>
+    <label>Ramp down %/s <span class="val" id="slew_down_v"></span></label>
+    <input type="range" id="slew_down" min="1" max="40" step="1"/>
+    <canvas id="curve" width="640" height="160"></canvas>
+    <button id="save">Save &amp; apply</button>
+    <div class="status" id="status"></div>
+  </div>
+  <script>
+    let cfg = { mode: 'curve', t_crit_c: 83, gpus: [] };
+    let gpuIdx = 0;
+    const ids = ['t_on','t_off','min_duty','t_full','scale','slew_up','slew_down'];
+    function gpu() { return cfg.gpus[gpuIdx] || {}; }
+    function bind() {
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        el.oninput = () => { syncFromSliders(); draw(); };
+      });
+      document.getElementById('gpuIndex').onchange = () => { gpuIdx = +document.getElementById('gpuIndex').value; loadGpuToSliders(); draw(); };
+      document.getElementById('mode').onchange = () => { cfg.mode = document.getElementById('mode').value; draw(); };
+      document.getElementById('save').onclick = save;
+    }
+    function loadGpuToSliders() {
+      const g = gpu();
+      document.getElementById('t_on').value = g.t_on ?? 45;
+      document.getElementById('t_off').value = g.t_off ?? 42;
+      document.getElementById('min_duty').value = g.min_duty ?? 30;
+      document.getElementById('t_full').value = g.t_full ?? 75;
+      document.getElementById('scale').value = Math.round((g.scale ?? 1) * 100);
+      document.getElementById('slew_up').value = g.slew_up ?? 8;
+      document.getElementById('slew_down').value = g.slew_down ?? 4;
+      syncFromSliders();
+    }
+    function syncFromSliders() {
+      const g = gpu();
+      g.t_on = +document.getElementById('t_on').value;
+      g.t_off = +document.getElementById('t_off').value;
+      g.min_duty = +document.getElementById('min_duty').value;
+      g.t_full = +document.getElementById('t_full').value;
+      g.scale = +document.getElementById('scale').value / 100;
+      g.slew_up = +document.getElementById('slew_up').value;
+      g.slew_down = +document.getElementById('slew_down').value;
+      const show = (id, v) => { const el = document.getElementById(id + '_v'); if (el) el.textContent = v; };
+      show('t_on', g.t_on);
+      show('t_off', g.t_off);
+      show('min_duty', g.min_duty);
+      show('t_full', g.t_full);
+      show('scale', g.scale.toFixed(2));
+      show('slew_up', g.slew_up);
+      show('slew_down', g.slew_down);
+    }
+    function dutyAtTemp(g, T) {
+      if (T < g.t_off) return 0;
+      if (T < g.t_on) return 0;
+      const frac = Math.min(1, Math.max(0, (T - g.t_on) / (g.t_full - g.t_on)));
+      let d = g.scale * 100 * frac;
+      if (d < g.min_duty) d = g.min_duty;
+      return Math.min(100, d);
+    }
+    function draw() {
+      const c = document.getElementById('curve');
+      const ctx = c.getContext('2d');
+      const g = gpu();
+      ctx.fillStyle = '#0f1115';
+      ctx.fillRect(0, 0, c.width, c.height);
+      const pad = 32;
+      const w = c.width - pad * 2, h = c.height - pad * 2;
+      ctx.strokeStyle = '#444';
+      ctx.beginPath();
+      ctx.moveTo(pad, pad); ctx.lineTo(pad, pad + h); ctx.lineTo(pad + w, pad + h);
+      ctx.stroke();
+      if (cfg.mode !== 'curve') {
+        ctx.fillStyle = '#9aa0a6';
+        ctx.fillText('NVIDIA auto — no curve', pad, pad + 20);
+        return;
+      }
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let px = 0; px <= w; px++) {
+        const T = 25 + (px / w) * 70;
+        const duty = dutyAtTemp(g, T);
+        const y = pad + h - (duty / 100) * h;
+        const x = pad + px;
+        if (px === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '11px system-ui';
+      ctx.fillText('25°C', pad, c.height - 8);
+      ctx.fillText('95°C', pad + w - 24, c.height - 8);
+      ctx.fillText('0%', 4, pad + h);
+      ctx.fillText('100%', 4, pad + 10);
+    }
+    async function load() {
+      const r = await fetch('/api/gpu-curve');
+      cfg = await r.json();
+      if (!cfg.gpus) cfg.gpus = [{ index: 0, t_on: 45, t_off: 42, min_duty: 30, t_full: 75, scale: 1, slew_up: 8, slew_down: 4 }];
+      const sel = document.getElementById('gpuIndex');
+      sel.innerHTML = '';
+      cfg.gpus.forEach((g, i) => {
+        const o = document.createElement('option');
+        o.value = i; o.textContent = 'GPU ' + (g.index ?? i);
+        sel.appendChild(o);
+      });
+      document.getElementById('mode').value = cfg.mode || 'curve';
+      loadGpuToSliders();
+      draw();
+    }
+    async function save() {
+      syncFromSliders();
+      cfg.gpus.forEach((g, i) => { g.index = g.index ?? i; g.curve_gen = (g.curve_gen || 0) + 1; });
+      const r = await fetch('/api/gpu-curve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+      const j = await r.json();
+      document.getElementById('status').textContent = j.ok ? 'Saved and applied.' : (j.error || 'Failed');
+      if (j.ok) await load();
+    }
+    bind();
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+/fan-daemon
+/fanctl
+/fan-web
+/fan-daemon-linux
+/fanctl-linux
+data/profile.json
+data/observations.jsonl
