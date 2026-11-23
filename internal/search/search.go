@@ -8,33 +8,48 @@ import (
 	"github.com/alexpy/fan_optimizer/internal/profile"
 )
 
+// TrialMode selects step-up, step-down, or mixed exploration.
+type TrialMode int
+
+const (
+	TrialOver TrialMode = iota
+	TrialUnder
+	TrialExplore
+)
+
 // State tracks an in-progress trial.
 type State struct {
 	Active     bool
 	URef       []float64
 	UCandidate []float64
-	OverTarget bool
+	Mode       TrialMode
 	Aggression float64
 	RNG        *rand.Rand
+	Proposed   bool // under trials: single proposal held for settle
 }
 
 // NewState starts search around uRef.
-func NewState(uRef []float64, aggression float64, seed int64) *State {
+func NewState(uRef []float64, aggression float64, seed int64, mode TrialMode) *State {
 	u := append([]float64(nil), uRef...)
 	return &State{
 		URef:       uRef,
 		UCandidate: u,
+		Mode:       mode,
 		Aggression: aggression,
 		RNG:        rand.New(rand.NewSource(seed)),
 	}
 }
 
-// SuggestTrial proposes next differential or scale move.
-func (s *State) SuggestTrial(overTarget bool) []float64 {
+// SuggestTrial proposes the next duty vector (or returns frozen candidate for under trials).
+func (s *State) SuggestTrial() []float64 {
+	if s.Mode == TrialUnder && s.Proposed {
+		return append([]float64(nil), s.UCandidate...)
+	}
 	n := len(s.URef)
 	out := append([]float64(nil), s.UCandidate...)
 	step := 0.05 * s.Aggression
-	if overTarget {
+	switch s.Mode {
+	case TrialOver:
 		if s.RNG.Float64() < 0.4 {
 			for i := range out {
 				out[i] = clamp01(out[i] + step*2)
@@ -43,7 +58,17 @@ func (s *State) SuggestTrial(overTarget bool) []float64 {
 			g := s.RNG.Intn(n)
 			out[g] = clamp01(out[g] + step*3)
 		}
-	} else {
+	case TrialUnder:
+		if s.RNG.Float64() < 0.5 {
+			for i := range out {
+				out[i] = clamp01(out[i] - step)
+			}
+		} else {
+			g := s.RNG.Intn(n)
+			out[g] = clamp01(out[g] - step*2)
+		}
+		s.Proposed = true
+	default:
 		switch s.RNG.Intn(3) {
 		case 0:
 			g := s.RNG.Intn(n)
@@ -93,6 +118,27 @@ func Score(temps map[string]float64, targets config.TempTargets, tAmb, noiseWeig
 // ShouldCommit if candidate moved enough from uRef.
 func ShouldCommit(uRef, candidate []float64, thresh float64) bool {
 	return profile.MaxPWMDelta(uRef, candidate) >= thresh
+}
+
+// DutiesNotAboveRef true if no group duty exceeds the cell reference.
+func DutiesNotAboveRef(uRef, candidate []float64) bool {
+	if len(uRef) != len(candidate) {
+		return false
+	}
+	for i := range uRef {
+		if candidate[i] > uRef[i]+1e-9 {
+			return false
+		}
+	}
+	return true
+}
+
+// ShouldCommitUnder applies commit rules for under-target step-down trials.
+func ShouldCommitUnder(uRef, candidate []float64, thresh float64, overshoot float64, miss bool) bool {
+	if miss || overshoot > 0 {
+		return false
+	}
+	return ShouldCommit(uRef, candidate, thresh) && DutiesNotAboveRef(uRef, candidate)
 }
 
 func clamp01(v float64) float64 {

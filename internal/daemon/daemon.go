@@ -40,6 +40,7 @@ type Daemon struct {
 	uRef          []float64
 	liveTweak     []float64
 	inTrial       bool
+	lastUnderAt   time.Time
 	obsPath       string
 	seedDone      bool
 	socketPath    string
@@ -112,7 +113,7 @@ func (d *Daemon) tick(ctx context.Context) error {
 		d.Prof.SetMode("control")
 		copy(d.uRef, k.U0)
 		copy(d.uApply, k.U0)
-		d.search = search.NewState(d.uRef, human.SearchAggression, time.Now().UnixNano())
+		d.search = search.NewState(d.uRef, human.SearchAggression, time.Now().UnixNano(), search.TrialExplore)
 		d.inTrial = true
 		d.trialStart = time.Now()
 		d.search.Active = true
@@ -145,48 +146,72 @@ func (d *Daemon) tick(ctx context.Context) error {
 
 	stable := d.loadStable(x)
 	miss := sensors.MissTarget(read.Temps, d.Groups.TempTargetsC, human.TempTargetOffsetC)
+	under := sensors.UnderTarget(read.Temps, d.Groups.TempTargetsC, human.TempTargetOffsetC, d.Groups.UndercoolMarginC)
+	settleDur := time.Duration(d.Groups.SettleSec * float64(time.Second))
+	underCooldown := time.Since(d.lastUnderAt) >= settleDur
 	newCell := d.farFromKnots(x, read.TAmb)
 	ambientDrift := d.ambientDrift(x, read.TAmb)
+	underTrial := under && underCooldown && !newCell && !ambientDrift && !loud
 
 	needSearch := d.inTrial || !d.seedDone ||
-		(stable && (miss || newCell || ambientDrift || loud || hot))
+		(stable && (miss || underTrial || newCell || ambientDrift || loud || hot))
 
 	if needSearch && stable && d.search == nil {
 		base := uInterp
 		if miss && len(d.uRef) == n {
 			base = d.uRef
 		}
-		d.search = search.NewState(base, human.SearchAggression, time.Now().UnixNano())
+		mode := search.TrialExplore
+		if miss || hot {
+			mode = search.TrialOver
+		} else if underTrial {
+			mode = search.TrialUnder
+		}
+		d.search = search.NewState(base, human.SearchAggression, time.Now().UnixNano(), mode)
 		d.inTrial = true
 		d.trialStart = time.Now()
 	}
 
 	if d.inTrial && d.search != nil && stable {
-		over := miss || hot
-		candidate := d.search.SuggestTrial(over)
-		for i := 0; i < n; i++ {
-			_ = d.Backend.WriteGroupDuty(i, candidate[i])
-		}
-		d.uApply = candidate
-		if time.Since(d.trialStart) >= time.Duration(d.Groups.SettleSec*float64(time.Second)) {
-			o := profile.Observation{
-				X: x, TAmb: read.TAmb, U: candidate, Temps: read.Temps,
-				RPMSum: d.rpmSum(read), Trial: true,
-			}
-			_ = sensors.AppendObs(d.obsPath, o)
-			os, _ := search.Score(read.Temps, d.Groups.TempTargetsC, read.TAmb, human.NoiseWeight, o.RPMSum, human.SearchAggression)
-			uRef := d.cellRef(x, read.TAmb, uInterp)
-			if search.ShouldCommit(uRef, candidate, d.Groups.CommitPWMThresh) && (os == 0 || !over) {
-				k := profile.Knot{X: x, TAmb: read.TAmb, U: append([]float64(nil), candidate...), U0: append([]float64(nil), uRef...)}
-				d.Prof.AppendKnot(k)
-				_ = d.Prof.Save()
-				copy(d.uRef, candidate)
-			}
+		if d.search.Mode == search.TrialUnder && miss {
 			d.inTrial = false
 			d.search = nil
-			d.seedDone = true
+			d.lastUnderAt = time.Now()
+		} else {
+			over := miss || hot
+			candidate := d.search.SuggestTrial()
+			for i := 0; i < n; i++ {
+				_ = d.Backend.WriteGroupDuty(i, candidate[i])
+			}
+			d.uApply = candidate
+			if time.Since(d.trialStart) >= settleDur {
+				o := profile.Observation{
+					X: x, TAmb: read.TAmb, U: candidate, Temps: read.Temps,
+					RPMSum: d.rpmSum(read), Trial: true,
+				}
+				_ = sensors.AppendObs(d.obsPath, o)
+				os, _ := search.Score(read.Temps, d.Groups.TempTargetsC, read.TAmb, human.NoiseWeight, o.RPMSum, human.SearchAggression)
+				uRef := d.cellRef(x, read.TAmb, uInterp)
+				commit := false
+				switch d.search.Mode {
+				case search.TrialUnder:
+					commit = search.ShouldCommitUnder(uRef, candidate, d.Groups.CommitPWMThresh, os, miss)
+					d.lastUnderAt = time.Now()
+				default:
+					commit = search.ShouldCommit(uRef, candidate, d.Groups.CommitPWMThresh) && (os == 0 || !over)
+				}
+				if commit {
+					k := profile.Knot{X: x, TAmb: read.TAmb, U: append([]float64(nil), candidate...), U0: append([]float64(nil), uRef...)}
+					d.Prof.AppendKnot(k)
+					_ = d.Prof.Save()
+					copy(d.uRef, candidate)
+				}
+				d.inTrial = false
+				d.search = nil
+				d.seedDone = true
+			}
+			return nil
 		}
-		return nil
 	}
 
 	// exploit: interpolate + slew

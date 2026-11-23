@@ -30,8 +30,9 @@ type GroupsConfig struct {
 	StableSec       float64            `json:"stable_sec"`
 	SettleSec       float64            `json:"settle_sec"`
 	TickHz          float64            `json:"tick_hz"`
-	SocketPath      string             `json:"socket_path"`
-	DataDir         string             `json:"data_dir"`
+	SocketPath         string             `json:"socket_path"`
+	DataDir            string             `json:"data_dir"`
+	UndercoolMarginC   float64            `json:"undercool_margin_c"` // default 5: step-down when all temps this far below target
 }
 
 // TDPLimits for normalizing power context.
@@ -127,5 +128,8 @@ func (g *GroupsConfig) Defaults() {
 	}
 	if g.TDPWatts.GPU1 == 0 {
 		g.TDPWatts.GPU1 = 450
+	}
+	if g.UndercoolMarginC == 0 {
+		g.UndercoolMarginC = 5
 	}
 }

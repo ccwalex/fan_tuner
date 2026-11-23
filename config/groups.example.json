@@ -28,6 +28,7 @@
   "load_step": 0.15,
   "ambient_step_c": 4,
   "stable_sec": 8,
+  "undercool_margin_c": 5,
   "settle_sec": 45,
   "tick_hz": 0.5,
   "socket_path": "data/fan-daemon.sock",

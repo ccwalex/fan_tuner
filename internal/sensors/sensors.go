@@ -261,6 +261,33 @@ func MissTarget(temps map[string]float64, targets config.TempTargets, offset flo
 	return false
 }
 
+// UnderTarget true if every configured sensor with target > 0 is at least margin °C below effective target.
+func UnderTarget(temps map[string]float64, targets config.TempTargets, offset, margin float64) bool {
+	if margin <= 0 {
+		return false
+	}
+	checks := map[string]float64{
+		"cpu":  targets.CPU - offset - margin,
+		"gpu0": targets.GPU0 - offset - margin,
+		"gpu1": targets.GPU1 - offset - margin,
+	}
+	any := false
+	for k, lim := range checks {
+		if lim <= 0 {
+			continue
+		}
+		t, ok := temps[k]
+		if !ok {
+			return false
+		}
+		if t > lim {
+			return false
+		}
+		any = true
+	}
+	return any
+}
+
 // AppendObs logs jsonl line.
 func AppendObs(path string, o profile.Observation) error {
 	b, err := json.Marshal(o)

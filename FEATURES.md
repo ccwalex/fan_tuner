@@ -64,11 +64,16 @@ There is **no** separate “season” variable. HVAC, weather, desk placement, o
 Search runs when:
 
 - Steady-state **temperature exceeds targets** while `x` remains in the same effective cell, or
+- Steady-state **temperature is comfortably below targets** (`undercool_margin_c`, default **5°C** below effective target on every configured sensor), triggering a **step-down** trial so learned duties can ratchet down—not only up, or
 - **Context changes** (new load/ambient step), requiring interpolation from prior knots plus exploration.
 
 **Trials** perturb **relative** duties across groups (differential splits)—e.g. biasing CPU cooler flow without assuming it only cools the CPU. Scoring uses overshoot vs human targets (with optional offset from feedback), ambient compensation, and a noise penalty weight.
 
+**Over-target trials** step PWM up each tick until settle. **Under-target trials** propose a single quieter duty vector at trial start and **hold** it for `settle_sec` (no per-tick walk-down). If any temp crosses its target during an under trial, the trial **aborts** without committing and control returns to IDW exploit.
+
 **Commit gate**: A trial may apply live immediately for transient correction, but the profile knot is **updated only** if the candidate differs from the cell reference `u_ref` by at least **`commit_pwm_threshold`** (default **10%** PWM) on at least one group.
+
+**Under-target commits** additionally require zero overshoot, no target miss at settle, and candidate duties **not above** the cell reference on any group. After an under trial (commit or abort), further under-target searches are suppressed for one `settle_sec` to avoid up/down chatter on the same cell.
 
 After interpolation, **random differential searches** still run from the interpolated point so cross-component effects (e.g. CPU fan helping GPU temps) can be discovered empirically.
 
